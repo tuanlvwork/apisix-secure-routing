@@ -7,28 +7,31 @@ A production-pattern microservices stack demonstrating **dual-network routing** 
 ## Architecture
 
 ```
-                          ┌─────────────────────────────────────────────┐
-                          │               Kubernetes Cluster             │
-                          │                                              │
-  Public Internet         │  ┌──────────── gateway ns ───────────────┐  │
-  ─────────────           │  │                                        │  │
-  curl :9080  ────────────┼──▶  APISIX :9080  (External / Public)    │  │
-                          │  │     │  /external/*  →  no auth        │  │
-  Internal Network        │  │     │                                  │  │
-  ─────────────           │  │  APISIX :9081  (Internal / Private)   │  │
-  curl :9081  ────────────┼──▶     │  /internal/* →  X-API-KEY       │  │
-  + X-API-KEY             │  │     │  401 silently rewritten → 404   │  │
-                          │  │     │                                  │  │
-                          │  │  etcd :2379  (APISIX config store)    │  │
-                          │  └──────────────────┬─────────────────────┘  │
-                          │                     │ proxy (ClusterIP)      │
-                          │  ┌──────── services ─▼─────────────────────┐  │
-                          │  │  product-service :3000                  │  │
-                          │  │    GET /api/products        (public)    │  │
-                          │  │    GET /api/products/admin  (internal)  │  │
-                          │  │    GET /api/products/admin/stats        │  │
-                          │  └─────────────────────────────────────────┘  │
-                          └─────────────────────────────────────────────┘
+                          ┌───────────────────────────────────────────────────┐
+                          │                 Kubernetes Cluster                 │
+                          │                                                    │
+  Public Internet         │  ┌─────────────── gateway ns ──────────────────┐  │
+  ─────────────           │  │                                              │  │
+  curl :9080  ────────────┼──▶  APISIX :9080  (External / Public)          │  │
+                          │  │     /external/*  →  no auth                 │  │
+                          │  │     proxy-rewrite → /api/public/*           │  │
+  Internal Network        │  │                                              │  │
+  ─────────────           │  │  APISIX :9081  (Internal / Private)         │  │
+  curl :9081  ────────────┼──▶     /internal/*  →  X-API-KEY required      │  │
+  + X-API-KEY             │  │     proxy-rewrite → /api/internal/*         │  │
+                          │  │     401 silently rewritten → 404            │  │
+                          │  │                                              │  │
+                          │  │  etcd :2379  (APISIX config store)          │  │
+                          │  └────────────────────┬─────────────────────────┘  │
+                          │                       │ proxy (ClusterIP)          │
+                          │  ┌──────── services ──▼──────────────────────────┐ │
+                          │  │  product-service :3000                        │ │
+                          │  │    GET /api/public/products   (public ns)     │ │
+                          │  │    GET /api/internal/products (internal ns)   │ │
+                          │  │    GET /api/internal/products/stats           │ │
+                          │  │    GET /api/health            (K8s probe)     │ │
+                          │  └───────────────────────────────────────────────┘ │
+                          └───────────────────────────────────────────────────┘
 ```
 
 ### Port Map
@@ -61,13 +64,15 @@ A production-pattern microservices stack demonstrating **dual-network routing** 
 
 ```
 apisix-secure-routing/
-├── services/
+├── apps/
 │   └── product-service/            # NestJS microservice
 │       ├── src/
 │       │   ├── main.ts             # globalPrefix = "api"
 │       │   ├── app.module.ts
 │       │   └── products/
-│       │       ├── products.controller.ts
+│       │       ├── products.controller.ts  # PublicProductsController
+│       │       │                           # InternalProductsController
+│       │       │                           # HealthController
 │       │       ├── products.service.ts
 │       │       └── products.module.ts
 │       ├── Dockerfile              # Multi-stage, non-root user
@@ -89,14 +94,16 @@ apisix-secure-routing/
 │           └── kustomization.yaml
 │
 └── scripts/
-    └── bootstrap.sh                # One-shot cold-start
+    ├── bootstrap.sh                # One-shot cold-start
+    └── rollout-config-job.sh       # Re-apply APISIX routes after changes
 ```
 
 ---
 
-## Architectural Rules
+## Security Architecture
 
-### 1 · Network Separation
+### 1 · Network Separation (Port Binding)
+
 Routes are **port-bound** using APISIX's `vars` expression on the built-in `server_port` Nginx variable:
 
 ```json
@@ -104,37 +111,50 @@ Routes are **port-bound** using APISIX's `vars` expression on the built-in `serv
 "vars": [["server_port", "==", "9081"]]  // internal only
 ```
 
-This means an internal route **cannot be reached** from the external port, even with a valid API key.
+An internal route **cannot be reached** from the external port, even with a valid API key.
 
-### 2 · Path Rewriting
-APISIX strips the network prefix before forwarding to NestJS:
+### 2 · Namespace Isolation (proxy-rewrite)
+
+APISIX routes each port to a **separate NestJS path namespace**:
 
 ```
-/external/products  ──proxy-rewrite──▶  /api/products
-/internal/products  ──proxy-rewrite──▶  /api/products
+Port 9080:  /external/*  ──proxy-rewrite──▶  /api/public/*
+Port 9081:  /internal/*  ──proxy-rewrite──▶  /api/internal/*
 ```
 
-NestJS knows nothing about the gateway prefixes — clean separation of concerns.
+The two namespaces are **disjoint** — they can never overlap.
 
-### 3 · Security — Hiding Internal Routes (401 → 404)
+**Why wildcards are safe:** even if an attacker on port 9080 tries to guess an internal path:
 
-Unauthorized access to an internal route **must not reveal its existence**.  
-We use the `serverless-post-function` plugin in the `header_filter` phase:
+```
+GET :9080/external/internal/products
+  → proxy-rewrite → /api/public/internal/products   ← wrong namespace → 404
+```
+
+NestJS never sees a request for `/api/internal/*` from the external port. This means you can add unlimited endpoints to either namespace **without touching APISIX config** — the wildcard covers everything automatically.
+
+### 3 · Key Authentication (port 9081)
+
+All requests on port 9081 must carry a valid `X-API-KEY` header, validated by APISIX's `key-auth` plugin before the request reaches NestJS.
+
+### 4 · Route Stealth (401 → 404)
+
+Unauthorized access to an internal route must not reveal its existence. The `serverless-post-function` plugin rewrites `401` to `404` in the `header_filter` phase:
 
 ```lua
--- Runs AFTER key-auth rejects in the access phase
 if ngx.status == 401 then
   ngx.status = 404   -- route is invisible to unauthorized callers
 end
 ```
 
-| Scenario | Expected response |
-|----------|-------------------|
+| Scenario | Response |
+|----------|----------|
 | Valid key on `:9081/internal/*` | `200 OK` |
 | Missing/wrong key on `:9081/internal/*` | `404 Not Found` ← (not 401) |
-| Any request on `:9080/internal/*` | `404 Not Found` (wrong port, no route) |
+| Any request on `:9080` for an unmapped path | `404 Not Found` |
 
-### 4 · APISIX Configuration — No CRDs
+### 5 · APISIX Configuration — No CRDs
+
 All APISIX routes, upstreams, and consumers are provisioned via a **Kubernetes `Job`** that runs a shell script calling the APISIX Admin REST API. This avoids CRD dependency and works identically in Minikube and GKE.
 
 ---
@@ -176,93 +196,110 @@ NODE_IP=$(minikube ip)
 # ✅ Public endpoint — no auth needed
 curl http://${NODE_IP}:30080/external/products
 
-# ✅ Internal endpoint — API key required
+# ✅ Internal endpoint — full inventory (API key required)
 curl -H "X-API-KEY: internal-secret-key-CHANGE-IN-PRODUCTION" \
-     http://${NODE_IP}:30081/internal/products/admin
+     http://${NODE_IP}:30081/internal/products
 
-# ✅ Admin stats (internal)
+# ✅ Internal stats endpoint
 curl -H "X-API-KEY: internal-secret-key-CHANGE-IN-PRODUCTION" \
-     http://${NODE_IP}:30081/internal/products/admin/stats
+     http://${NODE_IP}:30081/internal/products/stats
 
-# 🔒 Security test — MUST return 404, not 401
-curl -sv http://${NODE_IP}:30081/internal/products/admin 2>&1 | grep "< HTTP"
+# 🔒 Security test — no key → MUST return 404, not 401
+curl -sv http://${NODE_IP}:30081/internal/products 2>&1 | grep "< HTTP"
 # Expected: < HTTP/1.1 404 Not Found
 
-# 🔒 Port isolation — internal route unreachable on external port
-curl -sv http://${NODE_IP}:30080/internal/products/admin 2>&1 | grep "< HTTP"
-# Expected: < HTTP/1.1 404 Not Found
+# 🔒 Namespace isolation — hacker guesses /internal path via public port
+curl -sv http://${NODE_IP}:30080/external/internal/products 2>&1 | grep "< HTTP"
+# Expected: < HTTP/1.1 404 Not Found  (different namespace, never reaches NestJS)
+
+# 🔒 Port isolation — internal port returns 404 with no route match
+curl -sv http://${NODE_IP}:30080/internal/products 2>&1 | grep "< HTTP"
+# Expected: < HTTP/1.1 404 Not Found  (no route bound to port 9080 for /internal/*)
 ```
 
 ---
 
 ## NestJS Endpoints
 
-| Method | Path | Visibility | Description |
-|--------|------|------------|-------------|
-| `GET` | `/api/products` | Public | In-stock products only |
-| `GET` | `/api/products/admin` | Internal | All products (incl. out-of-stock) |
-| `GET` | `/api/products/admin/stats` | Internal | Aggregate stats |
-| `GET` | `/api/products/health` | Internal | K8s liveness/readiness probe |
+NestJS uses a global prefix `/api`. Controllers are split by namespace:
 
-> **Note:** NestJS has no authentication itself. Auth is enforced entirely at the APISIX layer.
+| Controller | NestJS Path | Gateway Path | Visibility |
+|------------|-------------|--------------|------------|
+| `PublicProductsController` | `GET /api/public/products` | `:9080/external/products` | Public — in-stock products only |
+| `InternalProductsController` | `GET /api/internal/products` | `:9081/internal/products` | Internal — full inventory |
+| `InternalProductsController` | `GET /api/internal/products/stats` | `:9081/internal/products/stats` | Internal — aggregate stats |
+| `HealthController` | `GET /api/health` | Not exposed via APISIX | K8s liveness/readiness probe |
+
+> **Note:** NestJS has no authentication itself. Auth is enforced entirely at the APISIX layer before NestJS is ever called.
 
 ---
 
 ## Adding a New Service
 
-### 1 · NestJS Controller
+The namespace convention scales to unlimited services with **zero changes to APISIX config**.
+
+### 1 · NestJS Controllers (follow the namespace convention)
 
 ```typescript
 // apps/my-service/src/orders/orders.controller.ts
-@Controller('orders')
-export class OrdersController {
-  @Get()          // → /api/orders  (public)
+
+@Controller('public/orders')         // → /api/public/orders
+export class PublicOrdersController {
+  @Get()                             // GET /api/public/orders
+  findAll() { ... }
+}
+
+@Controller('internal/orders')       // → /api/internal/orders
+export class InternalOrdersController {
+  @Get()                             // GET /api/internal/orders    (full list)
   findAll() { ... }
 
-  @Get('admin')   // → /api/orders/admin  (internal)
-  findAllAdmin() { ... }
+  @Get('stats')                      // GET /api/internal/orders/stats
+  getStats() { ... }
 }
 ```
+
+Because the APISIX external route already matches `/external/*` → `/api/public/*` and internal matches `/internal/*` → `/api/internal/*`, **these endpoints are live the moment NestJS deploys** — no APISIX update required.
 
 ### 2 · K8s Manifests
 
 ```bash
-# Create the folder structure (mirror product-service/)
+# Mirror the product-service structure
 cp -r k8s/base/product-service k8s/base/my-service
-# Edit deployment.yaml, service.yaml — update name + namespace
+# Edit deployment.yaml, service.yaml — update name, namespace, image
 # Add to k8s/base/kustomization.yaml:  - my-service/
 ```
 
-### 3 · APISIX Config Job
+### 3 · APISIX Upstream (only needed for a new upstream, not new endpoints)
 
 Add to `k8s/base/apisix-config-job/configmap.yaml`:
 
 ```bash
-# Upstream
+# New upstream only — no new routes needed!
 apisix_put "upstreams/my-service" '{
   "id": "my-service",
   "type": "roundrobin",
   "nodes": { "my-service.services.svc.cluster.local:3000": 1 }
 }'
 
-# External route (port 9080)
+# Route external (port 9080) to the new upstream
 apisix_put "routes/orders-external" '{
   "uri": "/external/orders*",
   "vars": [["server_port", "==", "9080"]],
-  "methods": ["GET"],
+  "methods": ["GET", "OPTIONS"],
   "plugins": {
-    "proxy-rewrite": { "regex_uri": ["/external/(.*)", "/api/$1"] }
+    "proxy-rewrite": { "regex_uri": ["/external/(.*)", "/api/public/$1"] }
   },
   "upstream_id": "my-service"
 }'
 
-# Internal route (port 9081) — with 401→404 security
+# Route internal (port 9081) to the new upstream, with 401→404 stealth
 apisix_put "routes/orders-internal" '{
   "uri": "/internal/orders*",
   "vars": [["server_port", "==", "9081"]],
   "plugins": {
     "key-auth": { "header": "X-API-KEY" },
-    "proxy-rewrite": { "regex_uri": ["/internal/(.*)", "/api/$1"] },
+    "proxy-rewrite": { "regex_uri": ["/internal/(.*)", "/api/internal/$1"] },
     "serverless-post-function": {
       "phase": "header_filter",
       "functions": ["return function(conf, ctx)\n  if ngx.status == 401 then\n    ngx.status = 404\n  end\nend"]
@@ -271,6 +308,8 @@ apisix_put "routes/orders-internal" '{
   "upstream_id": "my-service"
 }'
 ```
+
+> Upstream routes are per-service, but **path-based sub-routes within a service are free** — they are automatically covered by the upstream wildcard and routed by NestJS internally.
 
 ---
 
@@ -296,9 +335,8 @@ kubectl logs -n gateway deployment/apisix -f
 # View config Job logs
 kubectl logs -n gateway job/apisix-config-job
 
-# Rerun config Job (after a route change)
-kubectl delete job apisix-config-job -n gateway
-kubectl apply -k k8s/overlays/local
+# Re-apply APISIX routes after a config change
+bash scripts/rollout-config-job.sh
 
 # List all APISIX routes (from host)
 NODE_IP=$(minikube ip)
