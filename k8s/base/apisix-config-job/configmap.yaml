@@ -1,0 +1,153 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apisix-config-scripts
+  namespace: gateway
+data:
+  configure-apisix.sh: |
+    #!/bin/sh
+    set -eu
+
+    ADMIN_URL="http://apisix.gateway.svc.cluster.local:9180"
+    ADMIN_KEY="${APISIX_ADMIN_KEY}"
+    INTERNAL_KEY="${INTERNAL_API_KEY}"
+
+    # ─── helpers ──────────────────────────────────────────────────────────────
+    apisix_put() {
+      RESOURCE="$1"; BODY="$2"
+      HTTP_CODE=$(curl -s -o /tmp/apisix_resp -w "%{http_code}" \
+        -X PUT "${ADMIN_URL}/apisix/admin/${RESOURCE}" \
+        -H "X-API-KEY: ${ADMIN_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "${BODY}")
+      echo "  → ${RESOURCE} — HTTP ${HTTP_CODE}"
+      cat /tmp/apisix_resp; echo ""
+      # Fail loudly on non-2xx so the job shows as Failed (not silently stuck)
+      case "${HTTP_CODE}" in
+        2*) ;;
+        *) echo "ERROR: unexpected HTTP ${HTTP_CODE} for ${RESOURCE}" >&2; exit 1 ;;
+      esac
+    }
+
+    # ─── wait for APISIX admin API ────────────────────────────────────────────
+    echo ">>> Waiting for APISIX Admin API at ${ADMIN_URL} ..."
+    until curl -sf -o /dev/null \
+        -H "X-API-KEY: ${ADMIN_KEY}" \
+        "${ADMIN_URL}/apisix/admin/routes"; do
+      echo "    not ready, retrying in 3s..."
+      sleep 3
+    done
+    echo ">>> APISIX Admin API is ready!"
+    echo ""
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # 1. UPSTREAM — product-service
+    #    FQDN resolves across namespaces inside the cluster
+    # ═════════════════════════════════════════════════════════════════════════
+    echo ">>> [1/4] Creating upstream: product-service"
+    apisix_put "upstreams/product-service" '{
+      "id": "product-service",
+      "name": "product-service",
+      "desc": "NestJS product microservice in services namespace",
+      "type": "roundrobin",
+      "scheme": "http",
+      "nodes": {
+        "product-service.services.svc.cluster.local:3000": 1
+      },
+      "keepalive_pool": { "size": 320, "idle_timeout": 60, "requests": 1000 },
+      "checks": {
+        "active": {
+          "type": "http",
+          "http_path": "/api/products/health",
+          "interval": 10,
+          "timeout": 1,
+          "healthy": { "http_statuses": [200], "successes": 2 },
+          "unhealthy": { "http_statuses": [429, 500, 503], "http_failures": 2 }
+        }
+      }
+    }'
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # 2. CONSUMER — internal-client (holds the API key for internal routes)
+    # ═════════════════════════════════════════════════════════════════════════
+    echo ">>> [2/4] Creating consumer: internal_client"
+    apisix_put "consumers/internal_client" "{
+      \"username\": \"internal_client\",
+      \"desc\": \"Service-to-service caller on the internal network\",
+      \"plugins\": {
+        \"key-auth\": { \"key\": \"${INTERNAL_KEY}\" }
+      }
+    }"
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # 3. EXTERNAL ROUTE — port 9080, NO auth
+    #
+    #    vars: server_port == "9080"  → binds route to the external listener
+    #    proxy-rewrite:  /external/(*) → /api/$1
+    #
+    #    e.g. GET :9080/external/products  →  GET product-svc:3000/api/products
+    # ═════════════════════════════════════════════════════════════════════════
+    echo ">>> [3/4] Creating route: product-service EXTERNAL (port 9080)"
+    apisix_put "routes/product-external" '{
+      "id": "product-external",
+      "name": "product-service-external",
+      "desc": "Public product endpoints — port 9080 only, no authentication",
+      "uri": "/external/products*",
+      "methods": ["GET", "OPTIONS"],
+      "vars": [["server_port", "==", "9080"]],
+      "plugins": {
+        "proxy-rewrite": {
+          "regex_uri": ["/external/(.*)", "/api/$1"]
+        }
+      },
+      "upstream_id": "product-service"
+    }'
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # 4. INTERNAL ROUTE — port 9081, key-auth required
+    #
+    #    vars: server_port == "9081"  → binds route to the internal listener
+    #    key-auth:  caller must send  X-API-KEY: <INTERNAL_KEY>
+    #    proxy-rewrite: /internal/(*) → /api/$1
+    #    serverless-post-function (header_filter phase):
+    #        catches key-auth 401 → rewrites status to 404
+    #        → completely hides route existence from unauthorized callers
+    #
+    #    e.g. GET :9081/internal/products/admin  →  GET product-svc:3000/api/products/admin
+    # ═════════════════════════════════════════════════════════════════════════
+    echo ">>> [4/4] Creating route: product-service INTERNAL (port 9081)"
+    apisix_put "routes/product-internal" '{
+      "id": "product-internal",
+      "name": "product-service-internal",
+      "desc": "Internal product admin endpoints — port 9081 only, API key required",
+      "uri": "/internal/products*",
+      "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      "vars": [["server_port", "==", "9081"]],
+      "plugins": {
+        "key-auth": {
+          "header": "X-API-KEY"
+        },
+        "proxy-rewrite": {
+          "regex_uri": ["/internal/(.*)", "/api/$1"]
+        },
+        "serverless-post-function": {
+          "phase": "header_filter",
+          "functions": [
+            "return function(conf, ctx)\n  if ngx.status == 401 then\n    ngx.status = 404\n    ngx.header[\"content-type\"] = \"application/json; charset=utf-8\"\n  end\nend"
+          ]
+        }
+      },
+      "upstream_id": "product-service"
+    }'
+
+    echo ""
+    echo "✓ APISIX configuration complete!"
+    echo ""
+    echo "  External (public):"
+    echo "    curl http://<NODE_IP>:30080/external/products"
+    echo ""
+    echo "  Internal (API key required):"
+    echo "    curl -H 'X-API-KEY: ${INTERNAL_KEY}' http://<NODE_IP>:30081/internal/products/admin"
+    echo ""
+    echo "  Security test — unauthorized internal access (must return 404, NOT 401):"
+    echo "    curl -v http://<NODE_IP>:30081/internal/products/admin"

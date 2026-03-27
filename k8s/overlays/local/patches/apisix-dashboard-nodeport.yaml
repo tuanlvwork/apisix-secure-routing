@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix-dashboard
+  namespace: gateway
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 9000
+      targetPort: 9000
+      nodePort: 30090   # Access via: http://$(minikube ip):30090

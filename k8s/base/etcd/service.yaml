@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: gateway
+  labels:
+    app: etcd
+spec:
+  selector:
+    app: etcd
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+    - name: peer
+      port: 2380
+      targetPort: 2380
+  type: ClusterIP

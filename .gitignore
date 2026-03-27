@@ -1,0 +1,85 @@
+# ─── Node / npm ───────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ─── TypeScript ───────────────────────────────────────────────────────────────
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# ─── NestJS build output ──────────────────────────────────────────────────────
+apps/product-service/dist/
+apps/order-service/dist/
+
+# ─── Next.js build output ─────────────────────────────────────────────────────
+apps/storefront/.next/
+apps/storefront/out/
+apps/admin/.next/
+apps/admin/out/
+
+# Next.js cache
+apps/*/.next/cache/
+
+# ─── Environment / secrets ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# ─── Docker ───────────────────────────────────────────────────────────────────
+# Keep Dockerfiles tracked; ignore local overrides
+docker-compose.override.yml
+.dockerignore.local
+
+# ─── Kubernetes / local overrides ────────────────────────────────────────────
+# Keep all k8s manifests tracked.
+# Ignore any local secrets or generated kubeconfig drops.
+kubeconfig
+kubeconfig.yaml
+*.kubeconfig
+k8s/secrets/
+k8s/**/*-secret-local.yaml
+
+# ─── Editor & IDE ────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ─── macOS ───────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/
+*.log.*
+
+# ─── Coverage / test output ──────────────────────────────────────────────────
+coverage/
+.nyc_output/
+test-results/
+junit.xml
+
+# ─── Misc ────────────────────────────────────────────────────────────────────
+.cache/
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig

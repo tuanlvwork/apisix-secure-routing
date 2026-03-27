@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd
+  namespace: gateway
+  labels:
+    app: etcd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd
+  template:
+    metadata:
+      labels:
+        app: etcd
+    spec:
+      containers:
+        - name: etcd
+          # bitnami/etcd:3.5.12 is no longer available on Docker Hub.
+          # Using the official upstream image from gcr.io instead.
+          # etcdctl is included; env vars switch from Bitnami-style to upstream-style.
+          image: gcr.io/etcd-development/etcd:v3.5.12
+          ports:
+            - containerPort: 2379
+              name: client
+            - containerPort: 2380
+              name: peer
+          env:
+            # Official etcd image uses ETCD_* env vars directly (no Bitnami wrapper)
+            - name: ETCD_ADVERTISE_CLIENT_URLS
+              value: "http://0.0.0.0:2379"
+            - name: ETCD_LISTEN_CLIENT_URLS
+              value: "http://0.0.0.0:2379"
+            - name: ETCD_LISTEN_PEER_URLS
+              value: "http://0.0.0.0:2380"
+            - name: ETCD_INITIAL_ADVERTISE_PEER_URLS
+              value: "http://0.0.0.0:2380"
+            - name: ETCD_INITIAL_CLUSTER
+              value: "default=http://0.0.0.0:2380"
+            - name: ETCD_DATA_DIR
+              value: "/etcd-data"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          readinessProbe:
+            tcpSocket:
+              port: 2379
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 2379
+            initialDelaySeconds: 20
+            periodSeconds: 10
