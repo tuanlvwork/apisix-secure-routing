@@ -137,10 +137,11 @@ apisix-secure-routing/
 
                      ▼ both lanes proxy to the same upstream ▼
 
-            ┌──────────────────────────────────────────────────┐
-            │  product-service.services.svc.cluster.local:3000 │
-            │  active healthcheck: GET /api/health             │
-            └──────────────────────────────────────────────────┘
+            ┌────────────────────────────────────────────┐
+            │  product-service.services:80               │
+            │  (port 80 → container :3000)               │
+            │  active healthcheck: GET /api/health       │
+            └────────────────────────────────────────────┘
 ```
 
 > **Namespace isolation guarantee:** `proxy-rewrite` maps each port to a *disjoint* NestJS path prefix.
@@ -323,7 +324,7 @@ Add to `k8s/base/apisix-config-job/configmap.yaml`:
 apisix_put "upstreams/my-service" '{
   "id": "my-service",
   "type": "roundrobin",
-  "nodes": { "my-service.services.svc.cluster.local:3000": 1 }
+  "nodes": { "my-service.services:80": 1 }
 }'
 
 # Route external (port 9080) to the new upstream

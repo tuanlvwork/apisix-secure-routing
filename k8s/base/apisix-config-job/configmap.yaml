@@ -52,7 +52,7 @@ data:
       "type": "roundrobin",
       "scheme": "http",
       "nodes": {
-        "product-service.services.svc.cluster.local:3000": 1
+        "product-service.services:80": 1
       },
       "keepalive_pool": { "size": 320, "idle_timeout": 60, "requests": 1000 },
       "checks": {
