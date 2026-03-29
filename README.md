@@ -7,43 +7,40 @@ A production-pattern microservices stack demonstrating **dual-network routing** 
 ## Architecture
 
 ```
-                          ┌───────────────────────────────────────────────────┐
-                          │                 Kubernetes Cluster                 │
-                          │                                                    │
-  Public Internet         │  ┌─────────────── gateway ns ──────────────────┐  │
-  ─────────────           │  │                                              │  │
-  curl :9080  ────────────┼──▶  APISIX :9080  (External / Public)          │  │
-                          │  │     /external/*  →  no auth                 │  │
-                          │  │     proxy-rewrite → /api/public/*           │  │
-  Internal Network        │  │                                              │  │
-  ─────────────           │  │  APISIX :9081  (Internal / Private)         │  │
-  curl :9081  ────────────┼──▶     /internal/*  →  X-API-KEY required      │  │
-  + X-API-KEY             │  │     proxy-rewrite → /api/internal/*         │  │
-                          │  │     401 silently rewritten → 404            │  │
-                          │  │                                              │  │
-                          │  │  etcd :2379  (APISIX config store)          │  │
-                          │  └────────────────────┬─────────────────────────┘  │
-                          │                       │ proxy (ClusterIP)          │
-                          │  ┌──────── services ──▼──────────────────────────┐ │
-                          │  │  product-service :3000                        │ │
-                          │  │    GET /api/public/products   (public ns)     │ │
-                          │  │    GET /api/internal/products (internal ns)   │ │
-                          │  │    GET /api/internal/products/stats           │ │
-                          │  │    GET /api/health            (K8s probe)     │ │
-                          │  └───────────────────────────────────────────────┘ │
-                          └───────────────────────────────────────────────────┘
+                          ┌─────────────────────────────────────────────────────────────┐
+                          │                    Kubernetes Cluster                        │
+                          │                                                              │
+  Public Internet         │  ┌──────────────────── gateway ns ──────────────────────┐  │
+  ─────────────           │  │                                                      │  │
+  curl :9080  ────────────┼──▶  apisix (data plane)  :9080  Public routes           │  │
+                          │  │  role: data_plane       :9081  Internal routes        │  │
+  Internal Network        │  │                                                      │  │
+  ─────────────           │  │  apisix-admin (control) :9180  Admin API + Admin UI  │  │
+  curl :9081  ────────────┼──▶  role: control_plane           http://<ip>:9180/ui   │  │
+  + X-API-KEY             │  │                                                      │  │
+                          │  │     ↕ both read/write shared etcd :2379              │  │
+                          │  └────────────────────┬─────────────────────────────────┘  │
+                          │                       │ proxy (ClusterIP)                   │
+                          │  ┌──────── services ──▼──────────────────────────────────┐ │
+                          │  │  product-service :3000                                │ │
+                          │  │    GET /api/public/products   (public routes)         │ │
+                          │  │    GET /api/internal/products (internal routes)       │ │
+                          │  │    GET /api/internal/products/stats                   │ │
+                          │  │    GET /api/health            (K8s probe)             │ │
+                          │  └───────────────────────────────────────────────────────┘ │
+                          └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Port Map
 
-| Port | Listener | Purpose |
-|------|----------|---------|
-| `9080` | External | Public routes (`/external/*`) — no authentication |
-| `9081` | Internal | Private routes (`/internal/*`) — `X-API-KEY` required |
-| `9180` | Admin | APISIX Admin API — used by the config Job |
-| `3000` | Internal | NestJS ClusterIP — never exposed externally |
+| Port | Pod | Purpose |
+|------|-----|---------|
+| `9080` | `apisix` (data plane) | Public routes (`/external/*`) — no authentication |
+| `9081` | `apisix` (data plane) | Private routes (`/internal/*`) — `X-API-KEY` required |
+| `9180` | `apisix-admin` (control plane) | Admin REST API + Admin UI (`/ui`) |
+| `3000` | `product-service` | NestJS ClusterIP — never exposed externally |
 
-**Minikube NodePorts:** `30080` (ext) · `30081` (int) · `31800` (admin)
+**Minikube NodePorts:** `30080` (ext) · `30081` (int) · `31800` (admin UI at `:31800/ui`)
 
 ---
 
@@ -51,7 +48,7 @@ A production-pattern microservices stack demonstrating **dual-network routing** 
 
 | Layer | Technology |
 |-------|-----------|
-| API Gateway | [Apache APISIX 3.9](https://apisix.apache.org/) |
+| API Gateway | [Apache APISIX 3.15](https://apisix.apache.org/) (split-plane: data + control) |
 | Config Store | [etcd 3.5](https://etcd.io/) |
 | Backend | [NestJS 10](https://nestjs.com/) (TypeScript) |
 | Orchestration | [Kubernetes](https://kubernetes.io/) via [Kustomize](https://kustomize.io/) |
@@ -82,7 +79,10 @@ apisix-secure-routing/
 │   ├── base/                       # Environment-agnostic manifests
 │   │   ├── namespaces.yaml         # gateway + services namespaces
 │   │   ├── etcd/                   # etcd deployment + service
-│   │   ├── apisix/                 # APISIX deployment, configmap, service
+│   │   ├── apisix/                 # Data plane  (role: data_plane)
+│   │   │                           #   ports 9080 + 9081, enable_admin: false
+│   │   ├── apisix-admin/           # Control plane (role: control_plane)
+│   │   │                           #   port 9180, Admin API + Admin UI (/ui)
 │   │   ├── product-service/        # Deployment + ClusterIP service
 │   │   ├── apisix-config-job/      # Secret, script ConfigMap, Job
 │   │   └── kustomization.yaml
@@ -90,7 +90,8 @@ apisix-secure-routing/
 │   └── overlays/
 │       └── local/                  # Minikube overrides
 │           ├── patches/
-│           │   └── apisix-service-nodeport.yaml
+│           │   ├── apisix-service-nodeport.yaml    # 30080/30081
+│           │   └── apisix-admin-nodeport.yaml      # 31800
 │           └── kustomization.yaml
 │
 └── scripts/
@@ -101,6 +102,49 @@ apisix-secure-routing/
 ---
 
 ## Security Architecture
+
+### Route Flow Diagram
+
+```
+┌─────────────────────────── EXTERNAL (Public) ── NodePort 30080 ─────────────────────────────────────┐
+│                                                                                                     │
+│  Client          apisix :9080                  proxy-rewrite         product-service:3000           │
+│  curl :30080     route: product-external        /external/(.*)        /api/public/*                 │
+│                  vars: server_port==9080     →  /api/public/$1                                      │
+│                                                                                                     │
+│  ──GET /external/*──▶  [ match port 9080 ] ──▶ [ rewrite path ] ──▶  GET /api/public/products.      |
+│    (no auth)                                                           GET /api/public/products/:id |
+│                                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────── INTERNAL (Private) ── NodePort 30081 ───────────────────────────────────────────┐
+│                                                                                                            │
+│  Service         apisix :9081                  key-auth              proxy-rewrite                         │
+│  curl :30081     route: product-internal        X-API-KEY header      /internal/(.*)                       │
+│                  vars: server_port==9081        (consumer: internal_client)  /api/internal/$1              │
+│                                                                                                            │
+│                                                  ┌── missing/bad key                                       │
+│  ──GET /internal/*──▶  [ match port 9081 ] ──▶  ─┤                                                         │
+│    X-API-KEY: <key>                              │    serverless-post-function                             │
+│                                                  │    401 ──────────────────▶ 404                          │
+│                                                  │    (route existence hidden)                             │
+│                                                  │                                                         │
+│                                                  └── valid key                                             │
+│                                                     [ rewrite path ] ──▶  GET /api/internal/products.      |
+│                                                     [ rewrite path ] ──▶  GET /api/internal/products/stats |
+│                                                                                                            │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+                     ▼ both lanes proxy to the same upstream ▼
+
+            ┌──────────────────────────────────────────────────┐
+            │  product-service.services.svc.cluster.local:3000 │
+            │  active healthcheck: GET /api/health             │
+            └──────────────────────────────────────────────────┘
+```
+
+> **Namespace isolation guarantee:** `proxy-rewrite` maps each port to a *disjoint* NestJS path prefix.
+> A request on `:9080/external/internal/products` rewrites to `/api/public/internal/products` — the `/api/internal/*` namespace is unreachable from the public port by construction.
 
 ### 1 · Network Separation (Port Binding)
 
@@ -329,8 +373,11 @@ In production (GKE), replace the Kubernetes Secret with values from **Google Sec
 ## Useful Commands
 
 ```bash
-# View APISIX logs
+# View data-plane logs (traffic)
 kubectl logs -n gateway deployment/apisix -f
+
+# View control-plane logs (Admin API)
+kubectl logs -n gateway deployment/apisix-admin -f
 
 # View config Job logs
 kubectl logs -n gateway job/apisix-config-job
@@ -338,10 +385,17 @@ kubectl logs -n gateway job/apisix-config-job
 # Re-apply APISIX routes after a config change
 bash scripts/rollout-config-job.sh
 
-# List all APISIX routes (from host)
+# Open Admin UI in browser (control-plane — port 31800)
+open http://$(minikube ip):31800/ui
+
+# List all APISIX routes via Admin API
 NODE_IP=$(minikube ip)
 curl -H "X-API-KEY: supersecretadminkey" \
      http://${NODE_IP}:31800/apisix/admin/routes | jq .
+
+# Port-forward Admin API to localhost (alternative to NodePort)
+kubectl port-forward -n gateway svc/apisix-admin 9180:9180 &
+curl -H "X-API-KEY: supersecretadminkey" http://localhost:9180/apisix/admin/routes | jq .
 
 # Tear down
 minikube delete

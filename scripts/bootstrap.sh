@@ -112,8 +112,8 @@ kubectl delete job apisix-config-job \
   -n gateway --ignore-not-found --wait=true 2>&1 \
   | sed "s/^/          ${COLOR_DIM}/" | sed "s/$/${RESET}/"
 
-info "Removing gateway namespace workloads ${COLOR_DIM}(apisix, etcd)${RESET}"
-kubectl delete deployment apisix etcd \
+info "Removing gateway namespace workloads ${COLOR_DIM}(apisix, apisix-admin, etcd)${RESET}"
+kubectl delete deployment apisix apisix-admin etcd \
   -n gateway --ignore-not-found 2>&1 \
   | sed "s/^/          ${COLOR_DIM}/" | sed "s/$/${RESET}/"
 
@@ -123,13 +123,13 @@ kubectl delete deployment product-service \
   | sed "s/^/          ${COLOR_DIM}/" | sed "s/$/${RESET}/"
 
 info "Removing project-managed ConfigMaps"
-kubectl delete configmap apisix-config apisix-config-scripts \
+kubectl delete configmap apisix-config apisix-admin-config apisix-config-scripts \
   -n gateway --ignore-not-found 2>&1 \
   | sed "s/^/          ${COLOR_DIM}/" | sed "s/$/${RESET}/"
 
 info "Waiting for old Pods to fully terminate..."
 kubectl wait --for=delete pod \
-  -l 'app in (apisix,etcd)' \
+  -l 'app in (apisix,apisix-admin,etcd)' \
   -n gateway --timeout=60s 2>/dev/null || true
 kubectl wait --for=delete pod \
   -l app=product-service \
@@ -170,7 +170,7 @@ success "Manifests applied"
 step 5 6 "Wait for Deployments & config Job"
 
 echo ""
-for item in "etcd/gateway" "apisix/gateway" "product-service/services"; do
+for item in "etcd/gateway" "apisix/gateway" "apisix-admin/gateway" "product-service/services"; do
   dep="${item%%/*}"
   ns="${item##*/}"
   info "Rollout: ${COLOR_KEY}${dep}${RESET}  ${COLOR_DIM}(ns: ${ns})${RESET}"

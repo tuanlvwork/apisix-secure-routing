@@ -15,7 +15,4 @@ spec:
     - name: http-int
       port: 9081
       targetPort: 9081
-    - name: admin
-      port: 9180
-      targetPort: 9180
   type: ClusterIP   # Overridden to NodePort in local overlay

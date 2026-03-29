@@ -9,12 +9,8 @@ spec:
     - name: http-ext
       port: 9080
       targetPort: 9080
-      nodePort: 30080   # Access via: curl http://$(minikube ip):30080/...
+      nodePort: 30080   # External (public) — curl http://$(minikube ip):30080/...
     - name: http-int
       port: 9081
       targetPort: 9081
       nodePort: 30081   # Internal — simulates private LB
-    - name: admin
-      port: 9180
-      targetPort: 9180
-      nodePort: 31800   # Admin API — restrict in production

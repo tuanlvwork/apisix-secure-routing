@@ -1,22 +1,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: apisix
+  name: apisix-admin
   namespace: gateway
   labels:
-    app: apisix
+    app: apisix-admin
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: apisix
+      app: apisix-admin
   template:
     metadata:
       labels:
-        app: apisix
+        app: apisix-admin
     spec:
       initContainers:
-        # Wait for etcd before starting APISIX
+        # Wait for etcd before starting APISIX control plane
         - name: wait-for-etcd
           image: busybox:1.36
           command:
@@ -28,36 +28,38 @@ spec:
               done
               echo "etcd is up"
       containers:
-        - name: apisix
+        - name: apisix-admin
           image: apache/apisix:3.15.0-debian
           ports:
-            - name: http-ext
-              containerPort: 9080   # External / Public
-            - name: http-int
-              containerPort: 9081   # Internal / Private
+            - name: admin
+              containerPort: 9180   # Admin API + Admin UI (/ui)
           volumeMounts:
-            - name: apisix-config
+            - name: apisix-admin-config
               mountPath: /usr/local/apisix/conf/config.yaml
               subPath: config.yaml
           resources:
             requests:
-              cpu: "200m"
-              memory: "256Mi"
+              cpu: "100m"
+              memory: "128Mi"
             limits:
-              cpu: "1000m"
-              memory: "512Mi"
+              cpu: "500m"
+              memory: "256Mi"
           readinessProbe:
-            tcpSocket:
-              port: 9080
+            httpGet:
+              path: /apisix/admin/routes
+              port: 9180
+              httpHeaders:
+                - name: X-API-KEY
+                  value: supersecretadminkey
             initialDelaySeconds: 15
             periodSeconds: 5
             failureThreshold: 12
           livenessProbe:
             tcpSocket:
-              port: 9080
+              port: 9180
             initialDelaySeconds: 30
             periodSeconds: 10
       volumes:
-        - name: apisix-config
+        - name: apisix-admin-config
           configMap:
-            name: apisix-config
+            name: apisix-admin-config

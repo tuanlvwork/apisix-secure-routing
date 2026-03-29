@@ -20,7 +20,7 @@ Use this workflow to re-apply APISIX routes/consumers/upstreams after editing
 
 3. Verify routes were registered:
    ```bash
-   kubectl port-forward -n gateway svc/apisix 9180:9180 &
+   kubectl port-forward -n gateway svc/apisix-admin 9180:9180 &
    curl -s -H "X-API-KEY: supersecretadminkey" \
      http://localhost:9180/apisix/admin/routes | python3 -m json.tool
    ```

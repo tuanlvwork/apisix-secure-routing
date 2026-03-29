@@ -8,7 +8,7 @@ data:
     #!/bin/sh
     set -eu
 
-    ADMIN_URL="http://apisix.gateway.svc.cluster.local:9180"
+    ADMIN_URL="http://apisix-admin.gateway.svc.cluster.local:9180"
     ADMIN_KEY="${APISIX_ADMIN_KEY}"
     INTERNAL_KEY="${INTERNAL_API_KEY}"
 

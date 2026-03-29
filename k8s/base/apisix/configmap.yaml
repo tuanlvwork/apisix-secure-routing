@@ -6,35 +6,18 @@ metadata:
 data:
   config.yaml: |
     apisix:
-      # Listen on two ports:
-      #   9080 → External / Public  (simulates GKE External LB)
-      #   9081 → Internal / Private (simulates GKE Internal LB)
+      # Data plane: serve traffic only — Admin API lives in apisix-admin pod
       node_listen:
-        - port: 9080
-        - port: 9081
-      # enable_http2 moved to apisix level in APISIX >= 3.9
-      # (per-port enable_http2 is deprecated and causes fatal ERROR on startup)
+        - port: 9080   # External / Public  (maps to GKE External LB)
+        - port: 9081   # Internal / Private (maps to GKE Internal LB)
       enable_http2: false
       enable_ipv6: false
-      enable_admin: true         # Expose Admin API on the admin_listen port (9180)
-      enable_admin_cors: true    # Allow browser/curl from any origin to reach admin
-
+      enable_admin: false   # Admin API disabled — handled by apisix-admin pod
 
     deployment:
-      role: traditional
-      role_traditional:
+      role: data_plane
+      role_data_plane:
         config_provider: etcd
-      admin:
-        allow_admin:
-          - 0.0.0.0/0   # Tighten to pod CIDR in production
-        admin_listen:
-          ip: 0.0.0.0
-          port: 9180
-        admin_key_required: true
-        admin_key:
-          - name: admin
-            key: supersecretadminkey   # Overridden by Secret env mount in prod
-            role: admin
       etcd:
         host:
           - http://etcd.gateway.svc.cluster.local:2379

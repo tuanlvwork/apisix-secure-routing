@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - namespaces.yaml
   - etcd/
-  - apisix/
+  - apisix/            # Data plane  — serves traffic (9080/9081)
+  - apisix-admin/      # Control plane — Admin API + Admin UI (9180)
   - product-service/
   - apisix-config-job/
