@@ -27,7 +27,7 @@ Use this workflow to re-apply APISIX routes/consumers/upstreams after editing
 
 4. Quick smoke test (optional):
    ```bash
-   MINIKUBE_IP=$(minikube ip)
+   MINIKUBE_IP=$(minikube -p apisix-secure-routing ip)
    # External — no auth required
    curl -s "http://${MINIKUBE_IP}:30080/external/products"
    # Internal — auth required

@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 JOB_NAME="apisix-config-job"
 NS="gateway"
 JOB_YAML="${REPO_ROOT}/k8s/base/apisix-config-job/job.yaml"
-CM_YAML="${REPO_ROOT}/k8s/base/apisix-config-job/configmap.yaml"
+KUST_DIR="${REPO_ROOT}/k8s/base/apisix-config-job"
 STREAM_LOGS=false
 
 # ── Color helpers ─────────────────────────────────────────────────────────────
@@ -40,12 +40,7 @@ echo -e "${BOLD}${CYAN}║     APISIX Config Job — Rollout              ║${R
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
 
-# ── 1. Apply the latest configmap ────────────────────────────────────────────
-info "Applying configmap: apisix-config-scripts"
-kubectl apply -f "${CM_YAML}" -n "${NS}" | sed 's/^/     /'
-ok "ConfigMap applied"
-
-# ── 2. Delete the existing job (Jobs are immutable) ──────────────────────────
+# ── 1. Delete the existing job (Jobs are immutable) ──────────────────────────
 info "Deleting existing job '${JOB_NAME}' (if present)..."
 if kubectl get job "${JOB_NAME}" -n "${NS}" &>/dev/null; then
   kubectl delete job "${JOB_NAME}" -n "${NS}"
@@ -59,10 +54,10 @@ else
   warn "No existing job found — will create fresh"
 fi
 
-# ── 3. Create the new job ─────────────────────────────────────────────────────
-info "Creating job '${JOB_NAME}'..."
-kubectl apply -f "${JOB_YAML}"
-ok "Job created"
+# ── 2. Apply changes via Kustomize (ConfigMap/Secrets/Job) ────────────────────
+info "Applying Kustomize block for '${JOB_NAME}'..."
+kubectl apply -k "${KUST_DIR}" | sed 's/^/     /'
+ok "Resources applied and job created"
 
 # ── 4. Wait for a pod to be scheduled ────────────────────────────────────────
 info "Waiting for job pod to start..."
