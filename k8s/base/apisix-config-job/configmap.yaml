@@ -68,14 +68,33 @@ data:
     }'
 
     # ═════════════════════════════════════════════════════════════════════════
+    # 1.5. SERVICE — product-service
+    #      Binds upstream and shared plugins (like prometheus)
+    # ═════════════════════════════════════════════════════════════════════════
+    echo ">>> [1.5/5] Creating service: product-service"
+    apisix_put "services/product-service" '{
+      "id": "product-service",
+      "name": "product-service",
+      "upstream_id": "product-service",
+      "plugins": {
+        "prometheus": {}
+      }
+    }'
+
+    # ═════════════════════════════════════════════════════════════════════════
     # 2. CONSUMER — internal-client (holds the API key for internal routes)
     # ═════════════════════════════════════════════════════════════════════════
-    echo ">>> [2/4] Creating consumer: internal_client"
+    echo ">>> [2/5] Creating consumer: internal_client"
     apisix_put "consumers/internal_client" "{
       \"username\": \"internal_client\",
       \"desc\": \"Service-to-service caller on the internal network\",
       \"plugins\": {
-        \"key-auth\": { \"key\": \"${INTERNAL_KEY}\" }
+        \"key-auth\": { \"key\": \"${INTERNAL_KEY}\" },
+        \"limit-count\": {
+          \"count\": 50,
+          \"time_window\": 60,
+          \"rejected_code\": 429
+        }
       }
     }"
 
@@ -96,7 +115,7 @@ data:
     #  Adding a new public endpoint? Just add @Controller('public/orders') in NestJS.
     #  No APISIX change needed — the wildcard already covers it.
     # ═════════════════════════════════════════════════════════════════════════
-    echo ">>> [3/4] Creating route: product-service EXTERNAL (port 9080)"
+    echo ">>> [3/5] Creating route: product-service EXTERNAL (port 9080)"
     apisix_put "routes/product-external" '{
       "id": "product-external",
       "name": "product-service-external",
@@ -109,7 +128,7 @@ data:
           "regex_uri": ["/external/(.*)", "/api/public/$1"]
         }
       },
-      "upstream_id": "product-service"
+      "service_id": "product-service"
     }'
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -126,7 +145,7 @@ data:
     #  Adding a new internal service? Just add @Controller('internal/orders')
     #  in NestJS. No APISIX change needed.
     # ═════════════════════════════════════════════════════════════════════════
-    echo ">>> [4/4] Creating route: product-service INTERNAL (port 9081)"
+    echo ">>> [4/5] Creating route: product-service INTERNAL (port 9081)"
     apisix_put "routes/product-internal" '{
       "id": "product-internal",
       "name": "product-service-internal",
@@ -148,7 +167,7 @@ data:
           ]
         }
       },
-      "upstream_id": "product-service"
+      "service_id": "product-service"
     }'
 
     echo ""

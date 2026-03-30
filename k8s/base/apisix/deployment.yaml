@@ -35,6 +35,8 @@ spec:
               containerPort: 9080   # External / Public
             - name: http-int
               containerPort: 9081   # Internal / Private
+            - name: metrics
+              containerPort: 9091   # Prometheus Metrics
           volumeMounts:
             - name: apisix-config
               mountPath: /usr/local/apisix/conf/config.yaml

@@ -35,3 +35,11 @@ data:
       - ip-restriction
       - request-id
       - prometheus
+
+    plugin_attr:
+      prometheus:
+        export_uri: /apisix/prometheus/metrics
+        enable_export_server: true
+        export_addr:
+          ip: 0.0.0.0
+          port: 9091

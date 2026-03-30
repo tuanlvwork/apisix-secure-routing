@@ -18,3 +18,10 @@ patches:
       kind: Service
       name: apisix-admin
       namespace: gateway
+
+  # Monitoring — expose Grafana as NodePort
+  - path: patches/grafana-nodeport.yaml
+    target:
+      kind: Service
+      name: grafana
+      namespace: gateway

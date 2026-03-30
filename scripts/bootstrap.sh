@@ -7,6 +7,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INTERNAL_API_KEY="internal-secret-key-CHANGE-IN-PRODUCTION"
+MINIKUBE_PROFILE="apisix-secure-routing"
 START_TS=$SECONDS
 
 # ── ANSI color & style palette ────────────────────────────────────────────────
@@ -96,8 +97,8 @@ success "kustomize  ${COLOR_DIM}(using kubectl built-in — no standalone binary
 # ══════════════════════════════════════════════════════════════════════════════
 step 1 6 "Start Minikube"
 
-minikube start --driver=docker --cpus=4 --memory=4096 --addons=metrics-server \
-  && success "Minikube is running  $(minikube status | grep host | awk '{print $2}')" \
+minikube -p "${MINIKUBE_PROFILE}" start --driver=docker --cpus=4 --memory=4096 --addons=metrics-server \
+  && success "Minikube is running  $(minikube -p "${MINIKUBE_PROFILE}" status | grep host | awk '{print $2}')" \
   || fail "Minikube failed to start"
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -152,7 +153,7 @@ else
   success "package-lock.json present  ${COLOR_DIM}(npm ci will use it)${RESET}"
 fi
 
-eval "$(minikube docker-env)"
+eval "$(minikube -p "${MINIKUBE_PROFILE}" docker-env)"
 docker build -t product-service:latest "${REPO_ROOT}/apps/product-service/" \
   && success "Image ${COLOR_KEY}product-service:latest${RESET} built inside Minikube daemon" \
   || fail "Docker build failed"
@@ -189,7 +190,7 @@ kubectl wait --for=condition=complete job/apisix-config-job \
 # ══════════════════════════════════════════════════════════════════════════════
 step 6 6 "Verification"
 
-NODE_IP=$(minikube ip)
+NODE_IP=$(minikube -p "${MINIKUBE_PROFILE}" ip)
 TOTAL=$(elapsed)
 
 echo ""

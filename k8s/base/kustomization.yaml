@@ -7,3 +7,4 @@ resources:
   - apisix-admin/      # Control plane — Admin API + Admin UI (9180)
   - product-service/
   - apisix-config-job/
+  - monitoring/

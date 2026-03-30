@@ -15,4 +15,7 @@ spec:
     - name: http-int
       port: 9081
       targetPort: 9081
+    - name: metrics
+      port: 9091
+      targetPort: 9091
   type: ClusterIP   # Overridden to NodePort in local overlay

@@ -14,12 +14,15 @@ A production-pattern microservices stack demonstrating **dual-network routing** 
   ─────────────           │  │                                                      │  │
   curl :9080  ────────────┼──▶  apisix (data plane)  :9080  Public routes           │  │
                           │  │  role: data_plane       :9081  Internal routes        │  │
-  Internal Network        │  │                                                      │  │
-  ─────────────           │  │  apisix-admin (control) :9180  Admin API + Admin UI  │  │
-  curl :9081  ────────────┼──▶  role: control_plane           http://<ip>:9180/ui   │  │
-  + X-API-KEY             │  │                                                      │  │
-                          │  │     ↕ both read/write shared etcd :2379              │  │
-                          │  └────────────────────┬─────────────────────────────────┘  │
+  Internal Network        │  │                         :9091  Prometheus metrics     │  │
+  ─────────────           │  │                                                      │  │
+  curl :9081  ────────────┼──▶  apisix-admin (control) :9180  Admin API + Admin UI  │  │
+  + X-API-KEY (rate lim)  │  │  role: control_plane           http://<iP>:31800/ui  │  │
+                          │  │                                                      │  │
+  Grafana Web UI          │  │     ↕ both read/write shared etcd :2379              │  │
+  ─────────────           │  │                                                      │  │
+  http://<ip>:32000 ──────┼──▶  grafana :3000          ←─ prometheus :9090          │  │
+                          │  └────────────────────┬───────────│─────────────────────┘  │
                           │                       │ proxy (ClusterIP)                   │
                           │  ┌──────── services ──▼──────────────────────────────────┐ │
                           │  │  product-service :3000                                │ │
@@ -37,10 +40,12 @@ A production-pattern microservices stack demonstrating **dual-network routing** 
 |------|-----|---------|
 | `9080` | `apisix` (data plane) | Public routes (`/external/*`) — no authentication |
 | `9081` | `apisix` (data plane) | Private routes (`/internal/*`) — `X-API-KEY` required |
+| `9091` | `apisix` (data plane) | Prometheus scrapable metrics endpoint |
 | `9180` | `apisix-admin` (control plane) | Admin REST API + Admin UI (`/ui`) |
-| `3000` | `product-service` | NestJS ClusterIP — never exposed externally |
+| `9090` | `prometheus` | Prometheus monitoring server |
+| `3000` | `grafana` / `product-service` | Grafana Dashboard / NestJS ClusterIP |
 
-**Minikube NodePorts:** `30080` (ext) · `30081` (int) · `31800` (admin UI at `:31800/ui`)
+**Minikube NodePorts:** `30080` (ext) · `30081` (int) · `31800` (Admin UI at `:31800/ui`) · `32000` (Grafana UI)
 
 ---
 
@@ -51,6 +56,7 @@ A production-pattern microservices stack demonstrating **dual-network routing** 
 | API Gateway | [Apache APISIX 3.15](https://apisix.apache.org/) (split-plane: data + control) |
 | Config Store | [etcd 3.5](https://etcd.io/) |
 | Backend | [NestJS 10](https://nestjs.com/) (TypeScript) |
+| Monitoring | [Prometheus](https://prometheus.io/) & [Grafana](https://grafana.com/) |
 | Orchestration | [Kubernetes](https://kubernetes.io/) via [Kustomize](https://kustomize.io/) |
 | Local Cluster | [Minikube](https://minikube.sigs.k8s.io/) |
 | APISIX Config | Kubernetes `Job` + shell script calling Admin API |
@@ -85,6 +91,9 @@ apisix-secure-routing/
 │   │   │                           #   port 9180, Admin API + Admin UI (/ui)
 │   │   ├── product-service/        # Deployment + ClusterIP service
 │   │   ├── apisix-config-job/      # Secret, script ConfigMap, Job
+│   │   ├── monitoring/             # Prometheus and Grafana
+│   │   │   ├── prometheus/         # Scrapes apisix:9091
+│   │   │   └── grafana/            # Imports Apache APISIX Dashboard
 │   │   └── kustomization.yaml
 │   │
 │   └── overlays/
@@ -198,7 +207,15 @@ end
 | Missing/wrong key on `:9081/internal/*` | `404 Not Found` ← (not 401) |
 | Any request on `:9080` for an unmapped path | `404 Not Found` |
 
-### 5 · APISIX Configuration — No CRDs
+### 5 · Rate Limiting & Monitoring
+
+The internal consumer `internal_client` is rate-limited using the `limit-count` plugin allowing **50 requests per 60 seconds**. Requests exceeding this quota will receive a `429 Too Many Requests` response.
+
+A monitoring stack runs alongside APISIX:
+- **Prometheus** automatically scrapes the APISIX metrics endpoint on port `9091`.
+- **Grafana** exposes a native dashboard mapping total throughput versus `429 Too Many Requests` responses.
+
+### 6 · APISIX Configuration — No CRDs
 
 All APISIX routes, upstreams, and consumers are provisioned via a **Kubernetes `Job`** that runs a shell script calling the APISIX Admin REST API. This avoids CRD dependency and works identically in Minikube and GKE.
 
@@ -236,7 +253,7 @@ The script will:
 ## Verification
 
 ```bash
-NODE_IP=$(minikube ip)
+NODE_IP=$(minikube -p apisix-secure-routing ip)
 
 # ✅ Public endpoint — no auth needed
 curl http://${NODE_IP}:30080/external/products
@@ -320,14 +337,21 @@ cp -r k8s/base/product-service k8s/base/my-service
 Add to `k8s/base/apisix-config-job/configmap.yaml`:
 
 ```bash
-# New upstream only — no new routes needed!
+# 1. New upstream
 apisix_put "upstreams/my-service" '{
   "id": "my-service",
   "type": "roundrobin",
   "nodes": { "my-service.services:80": 1 }
 }'
 
-# Route external (port 9080) to the new upstream
+# 2. New service linking to upstream & prometheus metrics
+apisix_put "services/my-service" '{
+  "id": "my-service",
+  "upstream_id": "my-service",
+  "plugins": { "prometheus": {} }
+}'
+
+# 3. Route external (port 9080) using service_id
 apisix_put "routes/orders-external" '{
   "uri": "/external/orders*",
   "vars": [["server_port", "==", "9080"]],
@@ -335,10 +359,10 @@ apisix_put "routes/orders-external" '{
   "plugins": {
     "proxy-rewrite": { "regex_uri": ["/external/(.*)", "/api/public/$1"] }
   },
-  "upstream_id": "my-service"
+  "service_id": "my-service"
 }'
 
-# Route internal (port 9081) to the new upstream, with 401→404 stealth
+# 4. Route internal (port 9081) using service_id, with 401→404 stealth
 apisix_put "routes/orders-internal" '{
   "uri": "/internal/orders*",
   "vars": [["server_port", "==", "9081"]],
@@ -350,7 +374,7 @@ apisix_put "routes/orders-internal" '{
       "functions": ["return function(conf, ctx)\n  if ngx.status == 401 then\n    ngx.status = 404\n  end\nend"]
     }
   },
-  "upstream_id": "my-service"
+  "service_id": "my-service"
 }'
 ```
 
@@ -387,10 +411,13 @@ kubectl logs -n gateway job/apisix-config-job
 bash scripts/rollout-config-job.sh
 
 # Open Admin UI in browser (control-plane — port 31800)
-open http://$(minikube ip):31800/ui
+open http://$(minikube -p apisix-secure-routing ip):31800/ui
+
+# Open Grafana Monitoring Dashboard (port 32000)
+open http://$(minikube -p apisix-secure-routing ip):32000
 
 # List all APISIX routes via Admin API
-NODE_IP=$(minikube ip)
+NODE_IP=$(minikube -p apisix-secure-routing ip)
 curl -H "X-API-KEY: supersecretadminkey" \
      http://${NODE_IP}:31800/apisix/admin/routes | jq .
 
@@ -399,7 +426,7 @@ kubectl port-forward -n gateway svc/apisix-admin 9180:9180 &
 curl -H "X-API-KEY: supersecretadminkey" http://localhost:9180/apisix/admin/routes | jq .
 
 # Tear down
-minikube delete
+minikube -p apisix-secure-routing delete
 ```
 
 ---
