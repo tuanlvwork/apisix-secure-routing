@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apisix-admin-internal
+  namespace: gateway
+  labels:
+    app: apisix-admin-internal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apisix-admin-internal
+  template:
+    metadata:
+      labels:
+        app: apisix-admin-internal
+    spec:
+      initContainers:
+        # Wait for etcd before starting APISIX control plane
+        - name: wait-for-etcd
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z etcd-internal.gateway.svc.cluster.local 2379; do
+                echo "Waiting for etcd-internal..."; sleep 2
+              done
+              echo "etcd-internal is up"
+      containers:
+        - name: apisix-admin-internal
+          image: apache/apisix:3.15.0-debian
+          ports:
+            - name: admin
+              containerPort: 9180   # Admin API + Admin UI (/ui)
+          volumeMounts:
+            - name: apisix-admin-internal-config
+              mountPath: /usr/local/apisix/conf/config.yaml
+              subPath: config.yaml
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /apisix/admin/routes
+              port: 9180
+              httpHeaders:
+                - name: X-API-KEY
+                  value: supersecretadminkey
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 9180
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: apisix-admin-internal-config
+          configMap:
+            name: apisix-admin-internal-config

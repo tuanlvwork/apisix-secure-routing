@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix-internal
+  namespace: gateway
+spec:
+  type: NodePort
+  ports:
+    - name: http-int
+      port: 9081
+      targetPort: 9081
+      nodePort: 30081   # Internal — simulates private LB

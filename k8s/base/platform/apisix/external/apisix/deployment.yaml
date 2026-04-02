@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apisix-external
+  namespace: gateway
+  labels:
+    app: apisix-external
+    plane: data
+    traffic: external
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apisix-external
+  template:
+    metadata:
+      labels:
+        app: apisix-external
+        plane: data
+        traffic: external
+    spec:
+      initContainers:
+        # Wait for etcd before starting APISIX
+        - name: wait-for-etcd
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z etcd-external.gateway.svc.cluster.local 2379; do
+                echo "Waiting for etcd..."; sleep 2
+              done
+              echo "etcd is up"
+      containers:
+        - name: apisix-external
+          image: apache/apisix:3.15.0-debian
+          ports:
+            - name: http-ext
+              containerPort: 9080   # External / Public
+            - name: metrics
+              containerPort: 9091   # Prometheus Metrics
+          volumeMounts:
+            - name: apisix-external-config
+              mountPath: /usr/local/apisix/conf/config.yaml
+              subPath: config.yaml
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          readinessProbe:
+            tcpSocket:
+              port: 9080
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 9080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: apisix-external-config
+          configMap:
+            name: apisix-external-config

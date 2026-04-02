@@ -1,0 +1,12 @@
+{
+  "username": "internal_client",
+  "desc": "Service-to-service caller on the internal network",
+  "plugins": {
+    "key-auth": { "key": "${INTERNAL_API_KEY}" },
+    "limit-count": {
+      "count": 50,
+      "time_window": 60,
+      "rejected_code": 429
+    }
+  }
+}

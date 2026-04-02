@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix-admin-internal
+  namespace: gateway
+spec:
+  type: NodePort
+  ports:
+    - name: admin
+      port: 9180
+      targetPort: 9180
+      nodePort: 31801   # Admin API + Admin UI — http://$(minikube ip):31800/ui

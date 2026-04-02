@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - job.yaml
+
+configMapGenerator:
+  - name: apisix-internal-config-data
+    namespace: gateway
+    files:
+      - upstreams_product-service.json
+      - services_product-service.json
+      - consumers_internal_client.json
+      - routes_product-internal.json
+generatorOptions:
+  disableNameSuffixHash: true

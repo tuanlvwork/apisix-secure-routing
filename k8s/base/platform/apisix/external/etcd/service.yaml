@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-external
+  namespace: gateway
+  labels:
+    app: etcd-external
+spec:
+  selector:
+    app: etcd-external
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+    - name: peer
+      port: 2380
+      targetPort: 2380
+  type: ClusterIP

@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apisix-internal
+  namespace: gateway
+  labels:
+    app: apisix-internal
+    plane: data
+    traffic: internal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apisix-internal
+  template:
+    metadata:
+      labels:
+        app: apisix-internal
+        plane: data
+        traffic: internal
+    spec:
+      initContainers:
+        # Wait for etcd before starting APISIX
+        - name: wait-for-etcd
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z etcd-internal.gateway.svc.cluster.local 2379; do
+                echo "Waiting for etcd..."; sleep 2
+              done
+              echo "etcd is up"
+      containers:
+        - name: apisix-internal
+          image: apache/apisix:3.15.0-debian
+          ports:
+            - name: http-int
+              containerPort: 9081   # Internal / Private
+            - name: metrics
+              containerPort: 9091   # Prometheus Metrics
+          volumeMounts:
+            - name: apisix-internal-config
+              mountPath: /usr/local/apisix/conf/config.yaml
+              subPath: config.yaml
+          resources:
+            # Internal traffic is generally lower volume — smaller footprint
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          readinessProbe:
+            tcpSocket:
+              port: 9081
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 9081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: apisix-internal-config
+          configMap:
+            name: apisix-internal-config

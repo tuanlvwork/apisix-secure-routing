@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: apisix-config-job-internal
+  namespace: gateway
+  labels:
+    app: apisix-config-job-internal
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app: apisix-config-job-internal
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: apisix-configurator
+          image: curlimages/curl:8.6.0
+          command: ["sh", "/scripts/sync-apisix.sh"]
+          env:
+            - name: ADMIN_URL
+              value: "http://apisix-admin-internal.gateway.svc.cluster.local:9180"
+            - name: CONFIG_DIR
+              value: "/config"
+            - name: APISIX_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: apisix-secrets
+                  key: admin-key
+            - name: INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: apisix-secrets
+                  key: internal-api-key
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: config-data
+              mountPath: /config
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+      volumes:
+        - name: scripts
+          configMap:
+            name: apisix-config-scripts
+            defaultMode: 0755
+        - name: config-data
+          configMap:
+            name: apisix-internal-config-data

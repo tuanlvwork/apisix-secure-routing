@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd-internal
+  namespace: gateway
+  labels:
+    app: etcd-internal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd-internal
+  template:
+    metadata:
+      labels:
+        app: etcd-internal
+    spec:
+      containers:
+        - name: etcd
+          image: gcr.io/etcd-development/etcd:v3.5.12
+          ports:
+            - containerPort: 2379
+              name: client
+            - containerPort: 2380
+              name: peer
+          env:
+            - name: ETCD_ADVERTISE_CLIENT_URLS
+              value: "http://0.0.0.0:2379"
+            - name: ETCD_LISTEN_CLIENT_URLS
+              value: "http://0.0.0.0:2379"
+            - name: ETCD_LISTEN_PEER_URLS
+              value: "http://0.0.0.0:2380"
+            - name: ETCD_INITIAL_ADVERTISE_PEER_URLS
+              value: "http://0.0.0.0:2380"
+            - name: ETCD_INITIAL_CLUSTER
+              value: "default=http://0.0.0.0:2380"
+            - name: ETCD_DATA_DIR
+              value: "/etcd-data"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          readinessProbe:
+            tcpSocket:
+              port: 2379
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 2379
+            initialDelaySeconds: 20
+            periodSeconds: 10

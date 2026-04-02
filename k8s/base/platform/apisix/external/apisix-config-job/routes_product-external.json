@@ -1,0 +1,13 @@
+{
+  "id": "product-external",
+  "name": "product-service-external",
+  "desc": "Public endpoints — purely mapped to /api/public namespace",
+  "uri": "/external/*",
+  "methods": ["GET", "OPTIONS"],
+  "plugins": {
+    "proxy-rewrite": {
+      "regex_uri": ["/external/(.*)", "/api/public/$1"]
+    }
+  },
+  "service_id": "product-service"
+}

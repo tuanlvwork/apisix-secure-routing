@@ -1,0 +1,22 @@
+{
+  "id": "product-internal",
+  "name": "product-service-internal",
+  "desc": "Internal endpoints — key-auth, wildcard safe via namespace isolation",
+  "uri": "/internal/*",
+  "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  "plugins": {
+    "key-auth": {
+      "header": "X-API-KEY"
+    },
+    "proxy-rewrite": {
+      "regex_uri": ["/internal/(.*)", "/api/internal/$1"]
+    },
+    "serverless-post-function": {
+      "phase": "header_filter",
+      "functions": [
+        "return function(conf, ctx)\n  if ngx.status == 401 then\n    ngx.status = 404\n    ngx.header[\"content-type\"] = \"application/json; charset=utf-8\"\n  end\nend"
+      ]
+    }
+  },
+  "service_id": "product-service"
+}

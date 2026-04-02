@@ -38,10 +38,11 @@ A production-pattern microservices stack demonstrating **dual-network routing** 
 
 | Port | Pod | Purpose |
 |------|-----|---------|
-| `9080` | `apisix` (data plane) | Public routes (`/external/*`) — no authentication |
-| `9081` | `apisix` (data plane) | Private routes (`/internal/*`) — `X-API-KEY` required |
-| `9091` | `apisix` (data plane) | Prometheus scrapable metrics endpoint |
-| `9180` | `apisix-admin` (control plane) | Admin REST API + Admin UI (`/ui`) |
+| `9080` | `apisix-external` (data plane) | Public routes (`/external/*`) — no authentication |
+| `9081` | `apisix-internal` (data plane) | Private routes (`/internal/*`) — `X-API-KEY` required |
+| `9091` | `apisix-external` / `internal` | Prometheus scrapable metrics endpoint (one per pod) |
+| `31800`| `apisix-admin-external` | External Admin REST API + Admin UI (`/ui`) |
+| `31801`| `apisix-admin-internal` | Internal Admin REST API + Admin UI (`/ui`) |
 | `9090` | `prometheus` | Prometheus monitoring server |
 | `3000` | `grafana` / `product-service` | Grafana Dashboard / NestJS ClusterIP |
 
@@ -67,45 +68,27 @@ A production-pattern microservices stack demonstrating **dual-network routing** 
 
 ```
 apisix-secure-routing/
-├── apps/
-│   └── product-service/            # NestJS microservice
-│       ├── src/
-│       │   ├── main.ts             # globalPrefix = "api"
-│       │   ├── app.module.ts
-│       │   └── products/
-│       │       ├── products.controller.ts  # PublicProductsController
-│       │       │                           # InternalProductsController
-│       │       │                           # HealthController
-│       │       ├── products.service.ts
-│       │       └── products.module.ts
-│       ├── Dockerfile              # Multi-stage, non-root user
-│       └── package.json
-│
 ├── k8s/
 │   ├── base/                       # Environment-agnostic manifests
-│   │   ├── namespaces.yaml         # gateway + services namespaces
-│   │   ├── etcd/                   # etcd deployment + service
-│   │   ├── apisix/                 # Data plane  (role: data_plane)
-│   │   │                           #   ports 9080 + 9081, enable_admin: false
-│   │   ├── apisix-admin/           # Control plane (role: control_plane)
-│   │   │                           #   port 9180, Admin API + Admin UI (/ui)
-│   │   ├── product-service/        # Deployment + ClusterIP service
-│   │   ├── apisix-config-job/      # Secret, script ConfigMap, Job
-│   │   ├── monitoring/             # Prometheus and Grafana
-│   │   │   ├── prometheus/         # Scrapes apisix:9091
-│   │   │   └── grafana/            # Imports Apache APISIX Dashboard
-│   │   └── kustomization.yaml
+│   │   ├── apps/
+│   │   │   └── product-service/    # NestJS microservice
+│   │   │
+│   │   ├── platform/
+│   │   │   ├── apisix/             # Dual APISIX Environment
+│   │   │   │   ├── external/       # Data plane, control plane, & etcd (public)
+│   │   │   │   ├── internal/       # Data plane, control plane, & etcd (private)
+│   │   │   │   └── shared/         # JSON Sync Scripts & Secrets
+│   │   │   │
+│   │   │   └── monitoring/         # Prometheus & Grafana stack
+│   │   │
+│   │   └── namespaces.yaml
 │   │
 │   └── overlays/
-│       └── local/                  # Minikube overrides
-│           ├── patches/
-│           │   ├── apisix-service-nodeport.yaml    # 30080/30081
-│           │   └── apisix-admin-nodeport.yaml      # 31800
-│           └── kustomization.yaml
+│       └── local/                  # Minikube NodePort overrides
 │
 └── scripts/
     ├── bootstrap.sh                # One-shot cold-start
-    └── rollout-config-job.sh       # Re-apply APISIX routes after changes
+    └── rollout-config-job.sh       # Re-apply APISIX declarative configurations
 ```
 
 ---
@@ -117,9 +100,9 @@ apisix-secure-routing/
 ```
 ┌─────────────────────────── EXTERNAL (Public) ── NodePort 30080 ─────────────────────────────────────┐
 │                                                                                                     │
-│  Client          apisix :9080                  proxy-rewrite         product-service:3000           │
+│  Client          apisix-external :9080         proxy-rewrite         product-service:3000           │
 │  curl :30080     route: product-external        /external/(.*)        /api/public/*                 │
-│                  vars: server_port==9080     →  /api/public/$1                                      │
+│                  vars: server_port==9080 ①   →  /api/public/$1                                      │
 │                                                                                                     │
 │  ──GET /external/*──▶  [ match port 9080 ] ──▶ [ rewrite path ] ──▶  GET /api/public/products.      |
 │    (no auth)                                                           GET /api/public/products/:id |
@@ -128,9 +111,9 @@ apisix-secure-routing/
 
 ┌─────────────────────────── INTERNAL (Private) ── NodePort 30081 ───────────────────────────────────────────┐
 │                                                                                                            │
-│  Service         apisix :9081                  key-auth              proxy-rewrite                         │
+│  Service         apisix-internal :9081         key-auth              proxy-rewrite                         │
 │  curl :30081     route: product-internal        X-API-KEY header      /internal/(.*)                       │
-│                  vars: server_port==9081        (consumer: internal_client)  /api/internal/$1              │
+│                  vars: server_port==9081 ①      (consumer: internal_client)  /api/internal/$1              │
 │                                                                                                            │
 │                                                  ┌── missing/bad key                                       │
 │  ──GET /internal/*──▶  [ match port 9081 ] ──▶  ─┤                                                         │
@@ -143,6 +126,9 @@ apisix-secure-routing/
 │                                                     [ rewrite path ] ──▶  GET /api/internal/products/stats |
 │                                                                                                            │
 └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+① The `vars: server_port` constraint is now belt-and-suspenders — each instance only listens on one port,
+  so cross-matching is architecturally impossible. It is kept for defense-in-depth.
 
                      ▼ both lanes proxy to the same upstream ▼
 
@@ -398,8 +384,11 @@ In production (GKE), replace the Kubernetes Secret with values from **Google Sec
 ## Useful Commands
 
 ```bash
-# View data-plane logs (traffic)
-kubectl logs -n gateway deployment/apisix -f
+# View external data-plane logs (public traffic)
+kubectl logs -n gateway deployment/apisix-external -f
+
+# View internal data-plane logs (private traffic)
+kubectl logs -n gateway deployment/apisix-internal -f
 
 # View control-plane logs (Admin API)
 kubectl logs -n gateway deployment/apisix-admin -f
@@ -424,6 +413,10 @@ curl -H "X-API-KEY: supersecretadminkey" \
 # Port-forward Admin API to localhost (alternative to NodePort)
 kubectl port-forward -n gateway svc/apisix-admin 9180:9180 &
 curl -H "X-API-KEY: supersecretadminkey" http://localhost:9180/apisix/admin/routes | jq .
+
+# Verify process isolation — each instance should only listen on its own port
+kubectl exec -n gateway deploy/apisix-external -- ss -tlnp | grep LISTEN
+kubectl exec -n gateway deploy/apisix-internal -- ss -tlnp | grep LISTEN
 
 # Tear down
 minikube -p apisix-secure-routing delete

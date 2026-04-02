@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apisix-config-scripts
+  namespace: gateway
+data:
+  sync-apisix.sh: |
+    #!/bin/sh
+    set -eu
+
+    # Expects ADMIN_URL and APISIX_ADMIN_KEY from env
+    # Expects JSON manifests mounted at $CONFIG_DIR (e.g., /config)
+
+    ADMIN_KEY="${APISIX_ADMIN_KEY}"
+    CONFIG_DIR="${CONFIG_DIR:-/config}"
+
+    # Wait for APISIX admin API
+    echo ">>> Waiting for APISIX Admin API at ${ADMIN_URL} ..."
+    until curl -sf -o /dev/null -H "X-API-KEY: ${ADMIN_KEY}" "${ADMIN_URL}/apisix/admin/routes"; do
+      echo "    not ready, retrying in 3s..."
+      sleep 3
+    done
+    echo ">>> APISIX Admin API is ready!"
+    echo ""
+
+    # Helper function to submit JSON to Admin API
+    # Replaces ${INTERNAL_API_KEY} placeholder in JSON with actual env var value
+    apisix_put() {
+      RESOURCE="$1"
+      FILE="$2"
+      echo ">>> Creating ${RESOURCE} from $(basename "$FILE")"
+
+      # Simple sed replacement for ${INTERNAL_API_KEY} since envsubst isn't in Alpine curl image
+      INTERNAL_KEY_VAL="${INTERNAL_API_KEY:-}"
+      BODY=$(sed "s/\${INTERNAL_API_KEY}/${INTERNAL_KEY_VAL}/g" "$FILE")
+
+      HTTP_CODE=$(curl -s -o /tmp/apisix_resp -w "%{http_code}" \
+        -X PUT "${ADMIN_URL}/apisix/admin/${RESOURCE}" \
+        -H "X-API-KEY: ${ADMIN_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "${BODY}")
+      
+      echo "  → ${RESOURCE} — HTTP ${HTTP_CODE}"
+      cat /tmp/apisix_resp; echo ""
+      
+      case "${HTTP_CODE}" in
+        2*) ;;
+        *) echo "ERROR: unexpected HTTP ${HTTP_CODE} for ${RESOURCE}" >&2; exit 1 ;;
+      esac
+    }
+
+    # Generic Sync Routine
+    # Order matters: upstreams -> services -> consumers -> routes
+    
+    sync_dir() {
+      TYPE="$1"       # e.g., upstreams
+      API_PATH="$2"   # e.g., upstreams
+      
+      for FILE in "${CONFIG_DIR}/${TYPE}_"*.json; do
+        [ -e "$FILE" ] || continue
+        
+        # Extract ID by stripping the prefix "type_" and the ".json" extension
+        FILENAME=$(basename "$FILE" .json)
+        ID=$(echo "$FILENAME" | sed "s/^${TYPE}_//")
+        
+        apisix_put "${API_PATH}/${ID}" "$FILE"
+      done
+    }
+
+    echo "--- Syncing Upstreams ---"
+    sync_dir "upstreams" "upstreams"
+
+    echo "--- Syncing Services ---"
+    sync_dir "services" "services"
+
+    echo "--- Syncing Consumers ---"
+    sync_dir "consumers" "consumers"
+
+    echo "--- Syncing Routes ---"
+    sync_dir "routes" "routes"
+
+    echo ""
+    echo "✓ APISIX configuration sync complete for ${ADMIN_URL}!"

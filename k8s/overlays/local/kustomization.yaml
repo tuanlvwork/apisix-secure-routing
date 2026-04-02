@@ -5,18 +5,23 @@ resources:
   - ../../base
 
 patches:
-  # Data plane — expose traffic ports as NodePort so host can reach Minikube
-  - path: patches/apisix-service-nodeport.yaml
+  # External data plane — expose public port as NodePort so host can reach Minikube
+  - path: patches/apisix-external-nodeport.yaml
     target:
       kind: Service
-      name: apisix
-      namespace: gateway
-
-  # Control plane — expose Admin API + Admin UI as NodePort
-  - path: patches/apisix-admin-nodeport.yaml
+      name: apisix-external
+  - path: patches/apisix-internal-nodeport.yaml
     target:
       kind: Service
-      name: apisix-admin
+      name: apisix-internal
+  - path: patches/apisix-admin-external-nodeport.yaml
+    target:
+      kind: Service
+      name: apisix-admin-external
+  - path: patches/apisix-admin-internal-nodeport.yaml
+    target:
+      kind: Service
+      name: apisix-admin-internal
       namespace: gateway
 
   # Monitoring — expose Grafana as NodePort

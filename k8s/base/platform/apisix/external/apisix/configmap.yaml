@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apisix-external-config
+  namespace: gateway
+data:
+  config.yaml: |
+    apisix:
+      # External data plane: public traffic only — listens on port 9080
+      node_listen:
+        - port: 9080   # External / Public (maps to GKE External LB)
+      enable_http2: false
+      enable_ipv6: false
+      enable_admin: false   # Admin API disabled — handled by apisix-admin pod
+
+    deployment:
+      role: data_plane
+      role_data_plane:
+        config_provider: etcd
+      etcd:
+        host:
+          - http://etcd-external.gateway.svc.cluster.local:2379
+        prefix: /apisix
+        timeout: 30
+
+    # Enable only plugins we actually use
+    plugins:
+      - proxy-rewrite
+      - key-auth
+      - serverless-post-function
+      - response-rewrite
+      - cors
+      - limit-count
+      - ip-restriction
+      - request-id
+      - prometheus
+
+    plugin_attr:
+      prometheus:
+        export_uri: /apisix/prometheus/metrics
+        enable_export_server: true
+        export_addr:
+          ip: 0.0.0.0
+          port: 9091

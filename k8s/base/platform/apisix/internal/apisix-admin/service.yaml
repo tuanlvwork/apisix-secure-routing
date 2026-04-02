@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix-admin-internal
+  namespace: gateway
+  labels:
+    app: apisix-admin-internal
+spec:
+  selector:
+    app: apisix-admin-internal
+  ports:
+    - name: admin
+      port: 9180
+      targetPort: 9180
+  type: ClusterIP   # Overridden to NodePort in local overlay

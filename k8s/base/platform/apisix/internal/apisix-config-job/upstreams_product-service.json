@@ -1,0 +1,21 @@
+{
+  "id": "product-service",
+  "name": "product-service",
+  "desc": "NestJS product microservice in services namespace",
+  "type": "roundrobin",
+  "scheme": "http",
+  "nodes": {
+    "product-service.services.svc.cluster.local:80": 1
+  },
+  "keepalive_pool": { "size": 320, "idle_timeout": 60, "requests": 1000 },
+  "checks": {
+    "active": {
+      "type": "http",
+      "http_path": "/api/health",
+      "interval": 10,
+      "timeout": 1,
+      "healthy": { "http_statuses": [200], "successes": 2 },
+      "unhealthy": { "http_statuses": [429, 500, 503], "http_failures": 2 }
+    }
+  }
+}

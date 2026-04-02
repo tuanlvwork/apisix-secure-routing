@@ -95,16 +95,19 @@ if ! minikube -p "${MINIKUBE_PROFILE}" status >/dev/null 2>&1; then
 fi
 
 info "Checking if APISIX is deployed..."
-if ! kubectl get service apisix -n gateway >/dev/null 2>&1; then
-  fail "APISIX service not found. Please run scripts/bootstrap.sh first."
+if ! kubectl get service apisix-external -n gateway > /dev/null 2>&1; then
+  fail "APISIX service (apisix-external) not found. Please run scripts/bootstrap.sh first."
+fi
+if ! kubectl get service apisix-internal -n gateway > /dev/null 2>&1; then
+  fail "APISIX service (apisix-internal) not found. Please run scripts/bootstrap.sh first."
 fi
 
 info "Establishing background port-forwarding to APISIX..."
 # Keep our local environment clean by killing the port-forwards upon script exit
 trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
 
-kubectl port-forward -n gateway svc/apisix ${EXT_PORT}:9080 >/dev/null 2>&1 &
-kubectl port-forward -n gateway svc/apisix ${INT_PORT}:9081 >/dev/null 2>&1 &
+kubectl port-forward -n gateway svc/apisix-external ${EXT_PORT}:9080 > /dev/null 2>&1 &
+kubectl port-forward -n gateway svc/apisix-internal ${INT_PORT}:9081 > /dev/null 2>&1 &
 
 sleep 3
 success "Port-forwards active to localhost:${EXT_PORT} and localhost:${INT_PORT}"

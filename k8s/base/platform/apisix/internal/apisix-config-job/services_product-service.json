@@ -1,0 +1,8 @@
+{
+  "id": "product-service",
+  "name": "product-service",
+  "upstream_id": "product-service",
+  "plugins": {
+    "prometheus": {}
+  }
+}

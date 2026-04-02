@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apisix-admin-external-config
+  namespace: gateway
+data:
+  config.yaml: |
+    apisix:
+      # Control plane: Admin API + Admin UI only — no traffic ports
+      enable_admin: true
+      enable_admin_cors: true    # Allow browser to reach admin UI from any origin
+
+    deployment:
+      role: control_plane
+      role_control_plane:
+        config_provider: etcd
+      admin:
+        allow_admin:
+          - 0.0.0.0/0   # Tighten to pod CIDR in production
+        admin_listen:
+          ip: 0.0.0.0
+          port: 9180
+        enable_admin_ui: true    # Built-in Admin UI served at http://<host>:9180/ui
+        admin_key_required: true
+        admin_key:
+          - name: admin
+            key: supersecretadminkey   # Overridden by Secret env mount in prod
+            role: admin
+      etcd:
+        host:
+          - http://etcd-external.gateway.svc.cluster.local:2379
+        prefix: /apisix
+        timeout: 30
+
+    # Must list same plugins as the data plane so the control plane can validate configs
+    plugins:
+      - proxy-rewrite
+      - key-auth
+      - serverless-post-function
+      - response-rewrite
+      - cors
+      - limit-count
+      - ip-restriction
+      - request-id
+      - prometheus
